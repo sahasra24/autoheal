@@ -8,6 +8,13 @@ AutoHeal is a cloud-native platform of three FastAPI microservices that **detect
 
 Recovery and scaling use Kubernetes' own machinery: probes, ReplicaSets, the kubelet and the HPA. Custom code is added only where it adds something real: a reliable job queue that survives pod death, a circuit breaker, a distributed rate limiter, and an API that explains what the cluster is doing.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+  <img alt="AutoHeal control dashboard: deployments, autoscalers, pods with restart counts and last termination reasons, the self-healing timeline, and failure-injection controls" src="docs/images/dashboard-light.png">
+</picture>
+
+<sub>The control dashboard, showing an OOM-killed pod restarted by the kubelet, a liveness-probe restart, and the HPA scaling tasks from 2 to 4 replicas. This screenshot uses a sample cluster state.</sub>
+
 ```mermaid
 flowchart LR
     client([Client]) --> ing[Ingress / ALB]
@@ -89,16 +96,15 @@ Open http://localhost:8090, paste the chaos token printed by `make port-forward`
 make demo        # runs every scenario and prints detection / recovery times
 ```
 
-```text
-=== crash -> tasks ===
-  injected into autoheal-tasks-7d9c...: target answered 202
-  expected: Process exits -> kubelet restarts the container (restartPolicy: Always); restart count +1.
-  [   1.0s] failure detected on autoheal-tasks-7d9c... (not ready or already restarted)
-  [   9.6s] container restarted by kubelet (restarts 0 -> 1, last exit: Error)
-  => recovered in 9.6s
-```
+Recovery times measured by the CI end-to-end job on a kind cluster (GitHub-hosted runner, 2 task replicas):
 
-*(Illustrative output. Run it yourself and record your own numbers in [docs/self-healing-scenarios.md](docs/self-healing-scenarios.md).)*
+| Scenario | Recovered in | How |
+|---|---|---|
+| Container crash | **4.1 s** | kubelet restart, restart count 0 → 1 |
+| Liveness failure | **28.8 s** | 3 failed probes × 10 s period, then restart |
+| Pod deleted | **3.2 s** | ReplicaSet replacement back to full ready capacity |
+
+Every CI run repeats these checks, so a change that breaks self-healing fails the build.
 
 | # | Scenario | Injected fault | Kubernetes mechanism | Command |
 |---|---|---|---|---|
@@ -130,6 +136,12 @@ Through the gateway (`:8080`, OpenAPI at `/docs`):
 Every response carries `X-Correlation-ID` and `X-RateLimit-*` headers. Failure injection is **not** reachable through the gateway, only on the control service's internal port.
 
 Control service (`:8090`): the same cluster views plus `GET /api/v1/chaos/scenarios`, and `POST|GET /api/v1/chaos/experiments` (requires `X-Chaos-Token`).
+
+### Interface
+
+| Gateway API (`/docs`) | Control API (`/docs`) |
+|---|---|
+| <img src="docs/images/gateway-api-docs.png" alt="Swagger UI for the AutoHeal API Gateway: health, jobs, compute, queue and cluster endpoints" width="420"> | <img src="docs/images/control-api-docs.png" alt="Swagger UI for the AutoHeal Control API: health, dev-only chaos endpoints and read-only cluster endpoints" width="420"> |
 
 ## Repository layout
 

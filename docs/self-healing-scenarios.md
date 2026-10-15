@@ -123,14 +123,14 @@ helm upgrade autoheal helm/autoheal -n autoheal --reuse-values --set image.tag=b
 
 ## Record your results
 
-Run `make demo` (scenarios 1 to 5) on your cluster and fill this in. These are your numbers to quote on a resume:
+The CI end-to-end job measures three of these on every run (GitHub-hosted runner, kind). Run `make demo` on your own cluster to fill in the rest:
 
 | Scenario | Detected | Recovered | Notes |
 |---|---|---|---|
-| Container crash | | | |
-| Liveness failure | | | |
+| Container crash | | 4.1 s (CI, kind) | restart count 0 → 1 |
+| Liveness failure | | 28.8 s (CI, kind) | 3 failed probes × 10 s period |
 | Readiness failure | | | no restart |
-| Pod deletion | | | |
+| Pod deletion | | 3.2 s (CI, kind) | ReplicaSet replacement |
 | OOMKilled | | | |
 | HPA scale-out (2 → N) | | | Locust users / RPS at peak: |
 | Redis outage | | | gateway 5xx during outage: |
