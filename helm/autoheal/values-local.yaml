@@ -1,0 +1,5 @@
+# minikube / kind with kube-prometheus-stack installed (make monitoring-up).
+monitoring:
+  serviceMonitor: {enabled: true}
+  prometheusRule: {enabled: true}
+  grafanaDashboard: {enabled: true}

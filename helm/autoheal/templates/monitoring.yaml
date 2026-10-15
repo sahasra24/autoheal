@@ -1,0 +1,47 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+# One ServiceMonitor scrapes every platform Service; Prometheus sets
+# job=<service name> (autoheal-gateway, ...), matching dashboards and alerts.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "autoheal.labels" (dict "root" . "component" "monitoring") | nindent 4 }}
+    {{- toYaml .Values.monitoring.serviceMonitor.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      autoheal.io/scrape: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+---
+{{- end }}
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "autoheal.labels" (dict "root" . "component" "monitoring") | nindent 4 }}
+    {{- toYaml .Values.monitoring.prometheusRule.labels | nindent 4 }}
+spec:
+  {{- .Files.Get "files/alerts/autoheal-rules.yaml" | nindent 2 }}
+---
+{{- end }}
+{{- if .Values.monitoring.grafanaDashboard.enabled }}
+# Picked up by the kube-prometheus-stack Grafana dashboard sidecar.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-dashboard
+  namespace: {{ .Values.monitoring.grafanaDashboard.namespace }}
+  labels:
+    {{- include "autoheal.labels" (dict "root" . "component" "monitoring") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  autoheal-overview.json: |-
+    {{- .Files.Get "files/dashboards/autoheal-overview.json" | nindent 4 }}
+{{- end }}

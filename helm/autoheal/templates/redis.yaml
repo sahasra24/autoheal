@@ -1,0 +1,93 @@
+{{- $ctx := dict "root" . "component" "redis" }}
+{{- if .Values.redis.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-redis
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.redis.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-redis
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single writer; never run two Redis pods on one volume
+  selector:
+    matchLabels:
+      {{- include "autoheal.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "autoheal.labels" $ctx | nindent 8 }}
+      annotations:
+        {{- include "autoheal.podAnnotations" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes", "--save", "60", "100"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ include "autoheal.secretName" . }}, key: redis-password}}
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: {{ include "autoheal.secretName" . }}, key: redis-password}}
+          ports:
+            - {name: redis, containerPort: 6379}
+          startupProbe:
+            exec: {command: [redis-cli, ping]}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket: {port: redis}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec: {command: [redis-cli, ping]}
+            periodSeconds: 5
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            {{- include "autoheal.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          {{- if .Values.redis.persistence.enabled }}
+          persistentVolumeClaim: {claimName: {{ .Release.Name }}-redis}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-redis
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "autoheal.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}

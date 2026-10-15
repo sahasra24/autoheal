@@ -1,0 +1,42 @@
+# AWS EKS overrides:  helm upgrade --install autoheal helm/autoheal -n autoheal -f helm/autoheal/values-eks.yaml \
+#                       --set image.registry=<account>.dkr.ecr.<region>.amazonaws.com --set image.tag=<git-sha>
+image:
+  registry: ""            # set by CI to the ECR registry
+  tag: ""                 # set by CI to the commit SHA (immutable tags)
+  pullPolicy: IfNotPresent
+
+environment: staging      # chaos stays available for demos; use "production" to hard-disable it
+chaos:
+  enabled: true
+
+gateway:
+  rateLimit:
+    requests: 300
+  trustForwardedFor: true # behind the ALB, the client IP is in X-Forwarded-For
+  autoscaling:
+    minReplicas: 2
+    maxReplicas: 10
+  ingress:
+    enabled: true
+    className: alb
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/healthcheck-path: /health/ready
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+
+tasks:
+  autoscaling:
+    minReplicas: 2
+    maxReplicas: 12
+
+redis:
+  persistence:
+    enabled: true
+    storageClass: gp3     # created by deploy/eks/storageclass.yaml
+    size: 2Gi
+
+monitoring:
+  serviceMonitor: {enabled: true}
+  prometheusRule: {enabled: true}
+  grafanaDashboard: {enabled: true}

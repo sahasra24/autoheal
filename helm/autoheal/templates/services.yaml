@@ -1,0 +1,94 @@
+{{- /*
+  Deployment + Service for each Python microservice. They share one pod
+  shape: non-root, read-only root FS, startup/liveness/readiness probes,
+  resource requests/limits, graceful drain on SIGTERM.
+*/ -}}
+{{- range $component := list "gateway" "tasks" "control" }}
+{{- $values := index $.Values $component }}
+{{- $ctx := dict "root" $ "component" $component }}
+{{- $name := include "autoheal.name" $ctx }}
+{{- $service := $values.service | default dict }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+spec:
+  {{- /* With an HPA, the HPA owns replicas; setting them here would fight it on every upgrade. */}}
+  {{- if not (and $values.autoscaling $values.autoscaling.enabled) }}
+  replicas: {{ $values.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}   # zero-downtime rollouts
+  selector:
+    matchLabels:
+      {{- include "autoheal.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "autoheal.labels" $ctx | nindent 8 }}
+      annotations:
+        {{- include "autoheal.podAnnotations" $ | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      {{- if ne $component "control" }}
+      automountServiceAccountToken: false
+      {{- end }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Tasks get longer, so in-flight jobs can finish before being handed back.
+      terminationGracePeriodSeconds: {{ ternary 45 30 (eq $component "tasks") }}
+      securityContext:
+        {{- include "autoheal.podSecurityContext" $ | nindent 8 }}
+      {{- include "autoheal.spread" $ctx | nindent 6 }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "autoheal.image" $ctx }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8000}
+          envFrom:
+            - configMapRef: {name: {{ $.Release.Name }}-config}
+          env:
+            {{- include "autoheal.commonEnv" $ | nindent 12 }}
+            {{- if eq $component "gateway" }}
+            - name: API_KEYS
+              valueFrom: {secretKeyRef: {name: {{ include "autoheal.secretName" $ }}, key: api-keys}}
+            {{- end }}
+          {{- include "autoheal.probes" $ | nindent 10 }}
+          lifecycle:
+            # Give endpoint controllers time to stop routing here before SIGTERM.
+            preStop:
+              exec: {command: [sleep, "5"]}
+          resources:
+            {{- toYaml $values.resources | nindent 12 }}
+          securityContext:
+            {{- include "autoheal.containerSecurityContext" $ | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+    autoheal.io/scrape: "true"
+spec:
+  type: {{ $service.type | default "ClusterIP" }}
+  selector:
+    {{- include "autoheal.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $service.port | default 8000 }}
+      targetPort: http
+---
+{{- end }}

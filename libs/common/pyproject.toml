@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoheal-common"
+version = "1.0.0"
+description = "Shared observability, health, and failure-injection building blocks for AutoHeal services"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "prometheus-client>=0.21",
+]
+
+[tool.setuptools.packages.find]
+include = ["autoheal_common*"]

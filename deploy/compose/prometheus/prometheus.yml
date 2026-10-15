@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - /etc/prometheus/rules/*.yaml
+
+scrape_configs:
+  # Job names match the Kubernetes Service names so dashboards/alerts work in both.
+  - job_name: autoheal-gateway
+    static_configs: [{targets: ["gateway:8000"]}]
+  - job_name: autoheal-tasks
+    # Docker DNS returns one A record per replica: each is scraped individually.
+    dns_sd_configs:
+      - names: [tasks]
+        type: A
+        port: 8000
+        refresh_interval: 15s
+  - job_name: autoheal-control
+    static_configs: [{targets: ["control:8000"]}]
+  - job_name: prometheus
+    static_configs: [{targets: ["localhost:9090"]}]

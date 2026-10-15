@@ -1,0 +1,38 @@
+# Repository-level tooling only. Each service is packaged and containerised
+# independently (see services/*/Dockerfile); this file configures lint + tests.
+
+[tool.pytest.ini_options]
+pythonpath = ["libs/common", "services/gateway", "services/tasks", "services/control"]
+testpaths = ["libs/common/tests", "services/gateway/tests", "services/tasks/tests", "services/control/tests"]
+addopts = "--import-mode=importlib -ra"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:kubernetes.*", "ignore:Using `httpx` with `starlette.testclient`"]
+
+[tool.coverage.run]
+source = ["libs/common/autoheal_common", "services/gateway/autoheal_gateway", "services/tasks/autoheal_tasks", "services/control/autoheal_control"]
+omit = ["*/tests/*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["helm", "deploy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF", "BLE", "S"]
+ignore = [
+    "S101",   # assert is fine in tests
+    "S104",   # binding 0.0.0.0 is intended inside containers
+    "S311",   # random is used for simulation, not security
+    "B008",   # FastAPI Depends()/Query() in defaults is idiomatic
+    "RUF012",
+    "ASYNC109", # explicit timeout params on shutdown/claim APIs are intentional
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autoheal_common", "autoheal_gateway", "autoheal_tasks", "autoheal_control"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S105", "S106", "ASYNC110"]
+"loadtest/**" = ["S"]
+"scripts/**" = ["S603", "S607", "S310", "E501", "PLW0603"]

@@ -1,0 +1,111 @@
+# Prometheus alerting rules for AutoHeal.
+# Shared by docker compose (mounted as a rule file) and Kubernetes (wrapped in
+# a PrometheusRule by the Helm chart). kube_* rules need kube-state-metrics,
+# so they only evaluate in a cluster.
+groups:
+  - name: autoheal.services
+    rules:
+      - alert: AutoHealTargetDown
+        expr: up{job=~"autoheal-.*"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.job }} instance {{ $labels.instance }} is not being scraped"
+          description: "Prometheus cannot scrape the target. Kubernetes should be restarting or replacing it."
+
+      - alert: AutoHealHighErrorRate
+        expr: |
+          sum by (job) (rate(autoheal_http_requests_total{status=~"5.."}[5m]))
+            / sum by (job) (rate(autoheal_http_requests_total[5m])) > 0.05
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.job }} 5xx ratio is {{ $value | humanizePercentage }}"
+
+      - alert: AutoHealHighLatencyP95
+        expr: |
+          histogram_quantile(0.95, sum by (job, le) (
+            rate(autoheal_http_request_duration_seconds_bucket{route!~"/health.*|/metrics"}[5m]))) > 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.job }} p95 latency is {{ $value | humanizeDuration }}"
+
+      - alert: AutoHealCircuitOpen
+        expr: max by (upstream) (autoheal_circuit_breaker_state) == 2
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "Gateway circuit breaker to {{ $labels.upstream }} is open"
+
+      - alert: AutoHealRateLimiterDegraded
+        expr: sum(rate(autoheal_rate_limit_decisions_total{decision="bypassed"}[5m])) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "Rate limiter is failing open: Redis unreachable from the gateway"
+
+  - name: autoheal.jobs
+    rules:
+      - alert: AutoHealJobFailureRate
+        expr: |
+          sum(rate(autoheal_jobs_finished_total{outcome="failed"}[10m]))
+            / sum(rate(autoheal_jobs_finished_total[10m])) > 0.10
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of job attempts are failing permanently"
+
+      - alert: AutoHealJobBacklog
+        expr: max(autoheal_job_queue_depth{state="queued"}) > 100
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Job backlog is {{ $value }}; workers are not keeping up"
+
+      - alert: AutoHealJobsRecoveredFromLostWorker
+        expr: sum(increase(autoheal_jobs_requeued_total{reason="lease_expired"}[10m])) > 0
+        labels: {severity: info}
+        annotations:
+          summary: "{{ $value }} in-flight jobs were recovered from a worker that died"
+
+  - name: autoheal.kubernetes
+    rules:
+      - alert: AutoHealContainerRestarted
+        expr: increase(kube_pod_container_status_restarts_total{namespace="autoheal"}[10m]) > 0
+        labels: {severity: info}
+        annotations:
+          summary: "{{ $labels.pod }} restarted {{ $value | humanize }}x in 10m (self-healed)"
+
+      - alert: AutoHealCrashLooping
+        expr: max_over_time(kube_pod_container_status_waiting_reason{namespace="autoheal", reason="CrashLoopBackOff"}[5m]) >= 1
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.pod }} is in CrashLoopBackOff; restarts are not fixing it"
+
+      - alert: AutoHealOOMKilled
+        expr: |
+          kube_pod_container_status_last_terminated_reason{namespace="autoheal", reason="OOMKilled"} == 1
+            and on (namespace, pod, container) increase(kube_pod_container_status_restarts_total[10m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} was OOMKilled; check memory limits"
+
+      - alert: AutoHealReplicasMismatch
+        expr: |
+          kube_deployment_spec_replicas{namespace="autoheal"}
+            != kube_deployment_status_replicas_available{namespace="autoheal"}
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.deployment }} has not converged to its desired replica count"
+
+      - alert: AutoHealHPAMaxedOut
+        expr: |
+          kube_horizontalpodautoscaler_status_current_replicas{namespace="autoheal"}
+            >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="autoheal"}
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "HPA {{ $labels.horizontalpodautoscaler }} is pinned at max replicas"

@@ -1,0 +1,13 @@
+# Applied before the Helm release. Pod Security Admission enforces the
+# "restricted" profile: every pod must run non-root, drop all capabilities,
+# use a seccomp profile and forbid privilege escalation.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autoheal
+  labels:
+    app.kubernetes.io/part-of: autoheal
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

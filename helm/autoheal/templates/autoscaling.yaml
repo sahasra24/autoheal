@@ -1,0 +1,57 @@
+{{- range $component := list "gateway" "tasks" }}
+{{- $values := index $.Values $component }}
+{{- if $values.autoscaling.enabled }}
+{{- $ctx := dict "root" $ "component" $component }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "autoheal.name" $ctx }}
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "autoheal.name" $ctx }}
+  minReplicas: {{ $values.autoscaling.minReplicas }}
+  maxReplicas: {{ $values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $values.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    # React fast to load, shed capacity slowly to avoid flapping.
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Percent, value: 100, periodSeconds: 30}
+        - {type: Pods, value: 2, periodSeconds: 30}
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: {{ $values.autoscaling.scaleDownStabilizationSeconds | default 180 }}
+      policies:
+        - {type: Percent, value: 50, periodSeconds: 60}
+---
+{{- end }}
+{{- end }}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $component := list "gateway" "tasks" }}
+{{- $ctx := dict "root" $ "component" $component }}
+# Voluntary disruptions (node drains, upgrades) never take a tier to zero.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "autoheal.name" $ctx }}
+  labels:
+    {{- include "autoheal.labels" $ctx | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "autoheal.selectorLabels" $ctx | nindent 6 }}
+---
+{{- end }}
+{{- end }}

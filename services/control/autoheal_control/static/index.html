@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoHeal Control</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --border: #e2e5ea;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5; --bad: #cf222e; --bad-bg: #ffebe9;
+    --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --panel: #161b22; --text: #e6edf3; --muted: #8d96a0; --border: #30363d;
+      --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #272115; --bad: #f85149; --bad-bg: #2d1416;
+      --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  .muted { color: var(--muted); }
+  main { padding: 16px 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); max-width: 1500px; margin: 0 auto; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .ok { color: var(--ok); background: var(--ok-bg); } .warn { color: var(--warn); background: var(--warn-bg); } .bad { color: var(--bad); background: var(--bad-bg); }
+  .stats { display: flex; gap: 22px; flex-wrap: wrap; }
+  .stat b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+  .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td.msg { white-space: normal; }
+  th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .chaos-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  input, select, button { font: inherit; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  button.danger { color: var(--bad); }
+  #err { color: var(--bad); }
+  @media (max-width: 600px) { main, header { padding-left: 16px; padding-right: 16px; } main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>AutoHeal</h1>
+  <span id="status" class="pill warn">loading…</span>
+  <span class="muted">namespace <b id="ns">–</b></span>
+  <span class="muted" id="updated"></span>
+  <span id="err"></span>
+</header>
+<main>
+  <section class="wide">
+    <h2>Platform</h2>
+    <div class="stats">
+      <div class="stat"><b id="s-pods">–</b><span class="muted">pods ready</span></div>
+      <div class="stat"><b id="s-restarts">–</b><span class="muted">container restarts</span></div>
+      <div class="stat"><b id="s-events">–</b><span class="muted">recovery events (1h)</span></div>
+    </div>
+  </section>
+  <section>
+    <h2>Deployments</h2>
+    <div class="cards" id="deployments"></div>
+  </section>
+  <section>
+    <h2>Autoscalers</h2>
+    <div class="cards" id="hpas"><span class="muted">none</span></div>
+  </section>
+  <section class="wide">
+    <h2>Pods</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Pod</th><th>Component</th><th>Phase</th><th>Ready</th><th class="num">Restarts</th><th>Last termination</th><th>Node</th></tr></thead>
+      <tbody id="pods"></tbody>
+    </table></div>
+  </section>
+  <section class="wide">
+    <h2>Self-healing timeline</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Time</th><th>Category</th><th>Reason</th><th>Object</th><th>Message</th></tr></thead>
+      <tbody id="timeline"></tbody>
+    </table></div>
+  </section>
+  <section class="wide" id="chaos" hidden>
+    <h2>Failure injection <span class="pill warn">dev only</span></h2>
+    <div class="chaos-controls">
+      <input id="token" type="password" placeholder="X-Chaos-Token" autocomplete="off">
+      <select id="target"><option>tasks</option><option>gateway</option><option>redis</option></select>
+      <button data-s="crash" class="danger">Crash</button>
+      <button data-s="unhealthy" class="danger">Fail liveness</button>
+      <button data-s="unready">Fail readiness 60s</button>
+      <button data-s="cpu_stress">CPU stress 120s</button>
+      <button data-s="memory_leak" class="danger">Exceed memory</button>
+      <button data-s="pod_delete" class="danger">Delete pod</button>
+      <button data-s="reset">Reset</button>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Time</th><th>Scenario</th><th>Pod</th><th>Status</th><th>Expected recovery</th></tr></thead>
+      <tbody id="experiments"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const time = (t) => (t ? new Date(t).toLocaleTimeString() : "–");
+const CAT = { restart: "warn", probe: "warn", crashloop: "bad", oom: "bad", replacement: "ok", scaling: "ok" };
+const MEMORY_PARAMS = { memory_leak: { mb: 1024 }, unready: { seconds: 60 }, cpu_stress: { seconds: 120, workers: 2 } };
+
+try { $("token").value = sessionStorage.getItem("chaosToken") || ""; } catch (_) {}
+
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: ${r.status} ${(await r.json().catch(() => ({}))).detail || ""}`);
+  return r.json();
+}
+
+function render(ov, pods, timeline) {
+  $("ns").textContent = ov.namespace;
+  const st = $("status");
+  st.textContent = ov.healthy ? "healthy" : "recovering";
+  st.className = "pill " + (ov.healthy ? "ok" : "warn");
+  $("s-pods").textContent = `${ov.pods_ready}/${ov.pods_total}`;
+  $("s-restarts").textContent = ov.total_restarts;
+  $("s-events").textContent = ov.recent_recovery_events;
+
+  $("deployments").innerHTML = ov.deployments.map((d) => `
+    <div class="card"><b>${esc(d.component || d.name)}</b>
+      <span class="pill ${d.healthy ? "ok" : "warn"}" style="float:right">${d.ready}/${d.desired}</span>
+      <div class="bar"><i style="width:${d.desired ? (100 * d.ready) / d.desired : 0}%"></i></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(d.name)}</div></div>`).join("");
+
+  $("hpas").innerHTML = ov.autoscalers.length ? ov.autoscalers.map((h) => `
+    <div class="card"><b>${esc(h.target)}</b>
+      <div>${h.current_replicas} replicas <span class="muted">(${h.min_replicas}–${h.max_replicas})</span></div>
+      <div class="muted">CPU ${h.current_cpu_utilization ?? "?"}% / target ${h.target_cpu_utilization ?? "?"}%</div>
+      <div class="bar"><i style="width:${Math.min(100, ((h.current_cpu_utilization || 0) / (h.target_cpu_utilization || 100)) * 100)}%"></i></div></div>`).join("")
+    : '<span class="muted">none (metrics-server required)</span>';
+
+  $("pods").innerHTML = pods.map((p) => {
+    const cls = p.ready ? "ok" : p.waiting_reason === "CrashLoopBackOff" ? "bad" : "warn";
+    const term = p.last_termination ? `${esc(p.last_termination.reason)} (exit ${p.last_termination.exit_code}) ${time(p.last_termination.finished_at)}` : "–";
+    return `<tr><td>${esc(p.name)}</td><td>${esc(p.component)}</td>
+      <td><span class="pill ${cls}">${esc(p.terminating ? "Terminating" : p.waiting_reason || p.phase)}</span></td>
+      <td>${p.ready ? "yes" : "no"}</td><td class="num">${p.restarts}</td><td>${term}</td><td class="muted">${esc(p.node)}</td></tr>`;
+  }).join("");
+
+  $("timeline").innerHTML = timeline.map((e) => `<tr><td>${time(e.timestamp)}</td>
+      <td><span class="pill ${CAT[e.category] || ""}">${esc(e.category)}</span></td><td>${esc(e.reason)}</td>
+      <td>${esc(e.object_kind)}/${esc(e.object_name)}</td><td class="msg">${esc(e.message)}</td></tr>`).join("")
+    || '<tr><td colspan="5" class="muted">No recovery events yet. Inject a failure to see Kubernetes heal it.</td></tr>';
+}
+
+async function refresh() {
+  try {
+    const [ov, pods, timeline] = await Promise.all([get("api/v1/overview"), get("api/v1/pods"), get("api/v1/recovery?limit=40")]);
+    render(ov, pods, timeline);
+    $("err").textContent = "";
+    $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    $("err").textContent = e.message;
+    $("status").textContent = "cluster unavailable";
+    $("status").className = "pill bad";
+  }
+  if (!$("chaos").hidden) refreshExperiments();
+}
+
+async function refreshExperiments() {
+  const token = $("token").value;
+  if (!token) return;
+  const r = await fetch("api/v1/chaos/experiments", { headers: { "X-Chaos-Token": token } });
+  if (!r.ok) return;
+  $("experiments").innerHTML = (await r.json()).map((x) => `<tr><td>${time(x.created_at)}</td><td>${esc(x.scenario)} → ${esc(x.target)}</td>
+    <td>${esc(x.pod)}</td><td><span class="pill ${x.status === "injected" ? "ok" : "bad"}">${esc(x.status)}</span></td>
+    <td class="msg">${esc(x.status === "injected" ? x.expected_recovery : x.detail)}</td></tr>`).join("");
+}
+
+document.querySelectorAll("#chaos button").forEach((b) => b.addEventListener("click", async () => {
+  const token = $("token").value;
+  try { sessionStorage.setItem("chaosToken", token); } catch (_) {}
+  const scenario = b.dataset.s;
+  const r = await fetch("api/v1/chaos/experiments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Chaos-Token": token },
+    body: JSON.stringify({ scenario, target: $("target").value, params: MEMORY_PARAMS[scenario] || {} }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) alert(`Experiment rejected (${r.status}): ${JSON.stringify(body.detail)}`);
+  refreshExperiments();
+}));
+
+get("api/v1/info").then((info) => { $("chaos").hidden = !info.chaos_enabled; }).catch(() => {});
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

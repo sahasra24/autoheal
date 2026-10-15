@@ -1,0 +1,10 @@
+apiVersion: v2
+name: autoheal
+description: Self-healing microservices platform - gateway, task workers, control API, Redis, autoscaling and observability.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [self-healing, microservices, fastapi, hpa, chaos-engineering]
+maintainers:
+  - name: AutoHeal maintainers

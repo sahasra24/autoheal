@@ -1,0 +1,112 @@
+# Default values target a local cluster (minikube / kind).
+# See values-eks.yaml for the AWS overrides.
+#
+# Install with release name "autoheal" in namespace "autoheal": dashboards and
+# alerts match on the resulting Service names (autoheal-gateway, ...).
+
+image:
+  registry: ""            # e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com
+  repositoryPrefix: autoheal-
+  tag: local
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+environment: development  # "production" hard-disables failure injection in the code
+logLevel: INFO
+
+# Development-only failure-injection API (see docs/self-healing-scenarios.md).
+chaos:
+  enabled: true
+
+# Leave empty to generate random values on first install (kept across upgrades).
+secrets:
+  redisPassword: ""
+  chaosToken: ""
+  apiKeys: ""             # comma-separated; empty disables gateway API-key auth
+
+gateway:
+  replicas: 2
+  rateLimit:
+    requests: 600
+    windowSeconds: 60
+    failOpen: true
+  trustForwardedFor: false
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+
+tasks:
+  replicas: 2
+  workerConcurrency: 2
+  computeConcurrency: 2
+  leaseTtlSeconds: 15
+  resources:
+    requests: {cpu: 250m, memory: 256Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 60
+    scaleDownStabilizationSeconds: 120
+
+control:
+  replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 300m, memory: 256Mi}
+  service:
+    port: 80
+
+redis:
+  image: redis:7.4-alpine
+  persistence:
+    enabled: false        # true requires a default StorageClass (EKS: EBS CSI driver)
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 250m, memory: 256Mi}
+
+# Probe timings shared by the Python services.
+probes:
+  startup: {periodSeconds: 2, failureThreshold: 30, timeoutSeconds: 2}
+  liveness: {periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2}
+  readiness: {periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 3}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Namespace allowed to scrape /metrics (kube-prometheus-stack).
+  monitoringNamespace: monitoring
+
+monitoring:
+  # Requires the Prometheus Operator CRDs (kube-prometheus-stack).
+  serviceMonitor:
+    enabled: false
+    interval: 15s
+    labels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: false
+    labels:
+      release: kube-prometheus-stack
+  grafanaDashboard:
+    enabled: false
+    namespace: monitoring

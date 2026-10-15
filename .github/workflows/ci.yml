@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Ruff
+        run: |
+          ruff check . --output-format=github
+          ruff format --check .
+      - name: Dashboard is up to date with its generator
+        run: |
+          python scripts/build_dashboard.py
+          git diff --exit-code helm/autoheal/files/dashboards
+      - name: Pytest
+        run: pytest --cov --cov-report=xml --cov-report=term --junitxml=junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            coverage.xml
+            junit.xml
+
+  chart:
+    name: Helm chart & manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Install kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Lint
+        run: helm lint helm/autoheal --strict
+      - name: Validate rendered manifests (local + EKS values)
+        run: |
+          helm template autoheal helm/autoheal -n autoheal \
+            | kubeconform -strict -summary -kubernetes-version 1.31.0 -
+          helm template autoheal helm/autoheal -n autoheal -f helm/autoheal/values-eks.yaml \
+              --set image.registry=123456789012.dkr.ecr.us-east-1.amazonaws.com --set image.tag=ci \
+            | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.31.0 -
+
+  images:
+    name: Build image (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [gateway, tasks, control]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          tags: autoheal-${{ matrix.service }}:ci
+          build-args: VERSION=${{ github.sha }}
+          push: false
+          load: true
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Image runs as non-root
+        run: |
+          user=$(docker inspect -f '{{.Config.User}}' autoheal-${{ matrix.service }}:ci)
+          echo "image user: $user"; [ "$user" = "10001:10001" ]
+
+  e2e:
+    name: End-to-end self-healing on kind
+    needs: [test, chart]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: autoheal
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Build and load images
+        run: |
+          for s in gateway tasks control; do
+            docker build -q -f services/$s/Dockerfile -t autoheal-$s:ci .
+            kind load docker-image autoheal-$s:ci --name autoheal
+          done
+      - name: Deploy
+        run: |
+          kubectl apply -f deploy/k8s/namespace.yaml
+          helm upgrade --install autoheal helm/autoheal -n autoheal \
+            --set image.tag=ci --set gateway.autoscaling.enabled=false --set tasks.autoscaling.enabled=false \
+            --wait --timeout 5m
+      - name: Smoke test + self-healing scenarios
+        run: ./scripts/e2e.sh

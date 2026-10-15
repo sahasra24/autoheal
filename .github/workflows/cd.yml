@@ -1,0 +1,88 @@
+name: CD (AWS EKS)
+
+# Opt-in: set repository variable AWS_DEPLOY_ENABLED=true and the variables /
+# secrets below. Authentication uses GitHub OIDC - no long-lived AWS keys.
+#   vars.AWS_REGION, vars.EKS_CLUSTER        e.g. us-east-1, autoheal
+#   secrets.AWS_DEPLOY_ROLE_ARN              IAM role trusting token.actions.githubusercontent.com
+#                                            (see deploy/eks/github-oidc-trust.json)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-eks
+  cancel-in-progress: false   # never interrupt a rollout halfway
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: >-
+      vars.AWS_DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: production     # add required reviewers in repo settings for a manual gate
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EKS_CLUSTER: ${{ vars.EKS_CLUSTER }}
+      TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repositories exist (immutable tags, scan on push)
+        run: |
+          for s in gateway tasks control; do
+            aws ecr describe-repositories --repository-names autoheal-$s >/dev/null 2>&1 || \
+              aws ecr create-repository --repository-name autoheal-$s \
+                --image-tag-mutability IMMUTABLE --image-scanning-configuration scanOnPush=true >/dev/null
+          done
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push images
+        run: |
+          for s in gateway tasks control; do
+            docker buildx build --push \
+              -f services/$s/Dockerfile \
+              -t ${{ steps.ecr.outputs.registry }}/autoheal-$s:${TAG} \
+              --build-arg VERSION=${TAG} \
+              --cache-from type=gha,scope=$s --cache-to type=gha,mode=max,scope=$s .
+          done
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Deploy with automatic rollback
+        # --atomic: if the new pods never become Ready (failing probes), Helm
+        # rolls the release back - self-healing applied to deployments too.
+        run: |
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+          kubectl apply -f deploy/k8s/namespace.yaml
+          helm upgrade --install autoheal helm/autoheal -n autoheal \
+            -f helm/autoheal/values-eks.yaml \
+            --set image.registry=${{ steps.ecr.outputs.registry }} \
+            --set image.tag=${TAG} \
+            --atomic --wait --timeout 10m
+
+      - name: Verify
+        run: |
+          kubectl -n autoheal get deploy,pods,hpa
+          kubectl -n autoheal get ingress autoheal-gateway \
+            -o jsonpath='{"Gateway URL: http://"}{.status.loadBalancer.ingress[0].hostname}{"\n"}' || true

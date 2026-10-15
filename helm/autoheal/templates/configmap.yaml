@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  labels:
+    {{- include "autoheal.labels" (dict "root" . "component" "config") | nindent 4 }}
+data:
+  # shared
+  ENVIRONMENT: {{ .Values.environment | quote }}
+  LOG_LEVEL: {{ .Values.logLevel | quote }}
+  LOG_JSON: "true"
+  CHAOS_ENABLED: {{ .Values.chaos.enabled | quote }}
+  # gateway
+  TASKS_URL: "http://{{ .Release.Name }}-tasks:8000"
+  CONTROL_URL: "http://{{ .Release.Name }}-control:{{ .Values.control.service.port }}"
+  RATE_LIMIT_REQUESTS: {{ .Values.gateway.rateLimit.requests | quote }}
+  RATE_LIMIT_WINDOW_SECONDS: {{ .Values.gateway.rateLimit.windowSeconds | quote }}
+  RATE_LIMIT_FAIL_OPEN: {{ .Values.gateway.rateLimit.failOpen | quote }}
+  TRUST_FORWARDED_FOR: {{ .Values.gateway.trustForwardedFor | quote }}
+  # tasks
+  WORKER_CONCURRENCY: {{ .Values.tasks.workerConcurrency | quote }}
+  COMPUTE_CONCURRENCY: {{ .Values.tasks.computeConcurrency | quote }}
+  LEASE_TTL_SECONDS: {{ .Values.tasks.leaseTtlSeconds | quote }}
+  # control
+  CLUSTER_BACKEND: kubernetes
+  PLATFORM_SELECTOR: "app.kubernetes.io/part-of=autoheal,app.kubernetes.io/instance={{ .Release.Name }}"
+  CHAOS_HTTP_TARGETS: "tasks,gateway"
+  CHAOS_DELETE_TARGETS: "tasks,gateway,redis"

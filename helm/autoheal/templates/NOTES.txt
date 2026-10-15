@@ -1,0 +1,15 @@
+AutoHeal {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+Watch pods come up:
+  kubectl -n {{ .Release.Namespace }} get pods -w
+
+API gateway (Swagger UI at /docs):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-gateway 8080:{{ .Values.gateway.service.port }}
+
+Control dashboard (cluster health, recovery timeline{{ if .Values.chaos.enabled }}, failure injection{{ end }}):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-control 8090:{{ .Values.control.service.port }}
+{{- if .Values.chaos.enabled }}
+
+Failure injection is ENABLED (development only). Chaos token:
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-secrets -o jsonpath='{.data.chaos-token}' | base64 -d
+{{- end }}

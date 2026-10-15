@@ -1,0 +1,12 @@
+# kind cluster: 1 control plane + 2 workers so topology spread and node
+# failure scenarios are meaningful. Default CNI is disabled for Calico
+# (NetworkPolicy enforcement); `make cluster-up CLUSTER=kind` installs it.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

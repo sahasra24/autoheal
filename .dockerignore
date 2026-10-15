@@ -1,0 +1,20 @@
+# Build context is the repo root; send only what images need.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/tests
+**/.venv
+.venv
+venv
+.git
+.github
+.vscode
+helm
+deploy
+docs
+loadtest
+scripts
+*.md
+.coverage
+htmlcov
